@@ -295,22 +295,85 @@ function chunk(type, data) {
   out.writeUInt32BE(data.length,0);t.copy(out,4);data.copy(out,8);
   out.writeUInt32BE(crc32(Buffer.concat([t,data])),data.length+8);return out;
 }
-function encodePNG() {
-  const stride=W*3, raw=Buffer.alloc((stride+1)*H), previous=new Uint8Array(stride);
-  for(let y=0;y<H;y++) {
-    const row=new Uint8Array(stride);
-    for(let x=0;x<W;x++) for(let c=0;c<3;c++) {
-      let sum=0;
-      for(let sy=0;sy<SS;sy++)for(let sx=0;sx<SS;sx++)sum+=pixels[(((y*SS+sy)*SW+x*SS+sx)*3)+c];
-      row[x*3+c]=Math.round(sum/(SS*SS));
+function paeth(left, above, upperLeft) {
+  const estimate = left + above - upperLeft;
+  const dl = Math.abs(estimate - left);
+  const da = Math.abs(estimate - above);
+  const dc = Math.abs(estimate - upperLeft);
+  if (dl <= da && dl <= dc) return left;
+  if (da <= dc) return above;
+  return upperLeft;
+}
+
+// The five standard lossless PNG filters are tried independently on each scanline.
+// A stable tie order and integer residuals keep the encoded stream reproducible.
+function filterRow(row, previous, candidates) {
+  const scores = [0, 0, 0, 0, 0];
+  for (let i = 0; i < row.length; i++) {
+    const value = row[i];
+    const left = i < 3 ? 0 : row[i - 3];
+    const above = previous[i];
+    const corner = i < 3 ? 0 : previous[i - 3];
+    const predictions = [
+      0,
+      left,
+      above,
+      Math.floor((left + above) / 2),
+      paeth(left, above, corner),
+    ];
+    for (let kind = 0; kind < 5; kind++) {
+      const residual = (value - predictions[kind]) & 255;
+      candidates[kind][i] = residual;
+      scores[kind] += residual < 128 ? residual : 256 - residual;
     }
-    // PNG filter Up produces compact output for softly shaded vector artwork.
-    raw[y*(stride+1)]=2;
-    for(let i=0;i<stride;i++)raw[y*(stride+1)+1+i]=(row[i]-previous[i]+256)&255;
+  }
+  let best = 0;
+  for (let kind = 1; kind < 5; kind++) {
+    if (scores[kind] < scores[best]) best = kind;
+  }
+  return best;
+}
+
+function downsampleRow(y, row) {
+  for (let x = 0; x < W; x++) {
+    for (let channel = 0; channel < 3; channel++) {
+      let sum = 0;
+      for (let sy = 0; sy < SS; sy++) {
+        for (let sx = 0; sx < SS; sx++) {
+          const sample = ((y * SS + sy) * SW + x * SS + sx) * 3;
+          sum += pixels[sample + channel];
+        }
+      }
+      row[x * 3 + channel] = Math.round(sum / (SS * SS));
+    }
+  }
+}
+
+function encodePNG() {
+  const stride = W * 3;
+  const raw = Buffer.alloc((stride + 1) * H);
+  const previous = new Uint8Array(stride);
+  const row = new Uint8Array(stride);
+  const candidates = Array.from({ length: 5 }, () => new Uint8Array(stride));
+  for (let y = 0; y < H; y++) {
+    downsampleRow(y, row);
+    const best = filterRow(row, previous, candidates);
+    const offset = y * (stride + 1);
+    raw[offset] = best;
+    raw.set(candidates[best], offset + 1);
     previous.set(row);
   }
-  const ihdr=Buffer.alloc(13);ihdr.writeUInt32BE(W,0);ihdr.writeUInt32BE(H,4);ihdr[8]=8;ihdr[9]=2;
-  return Buffer.concat([Buffer.from([137,80,78,71,13,10,26,10]),chunk('IHDR',ihdr),chunk('IDAT',deflateSync(raw,{level:9})),chunk('IEND',Buffer.alloc(0))]);
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(W, 0);
+  ihdr.writeUInt32BE(H, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 2;
+  return Buffer.concat([
+    Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
+    chunk('IHDR', ihdr),
+    chunk('IDAT', deflateSync(raw, { level: 9 })),
+    chunk('IEND', Buffer.alloc(0)),
+  ]);
 }
 const output=process.env.MAKEFUN_OUTPUT_DIR || '/output';
 mkdirSync(output,{recursive:true});
