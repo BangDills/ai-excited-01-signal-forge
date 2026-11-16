@@ -1,0 +1,13 @@
+{
+  "name": "the-lighthouse-catch",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Original deterministic procedural illustration for make.fun ai-excited-01",
+  "license": "MIT",
+  "engines": { "node": ">=22.18.0" },
+  "scripts": {
+    "render": "node main.ts",
+    "test": "node --test tests/entry.test.mjs"
+  }
+}

@@ -1,0 +1,6 @@
+out/
+coverage/
+*.log
+.env
+wallet.json
+makefun-run.json
